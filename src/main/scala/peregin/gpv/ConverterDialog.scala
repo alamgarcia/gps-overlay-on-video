@@ -180,29 +180,50 @@ class ConverterDialog(setup: Setup, telemetry: Telemetry, template: TemplateEntr
     recorder.setOption("c", "copy")
     recorder.setFrameRate(grabber.getFrameRate)
 
+    // --- HW Acceleration ---
+    // Detecta automáticamente el soporte de HW Accel (NVENC, VAAPI, QSV, etc.)
+    // Puedes expandir la lista según el soporte de tu ffmpeg
+    val hwCodecs = Seq("h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi", "h264_qsv", "hevc_qsv")
+    // Intenta detectar si el sistema soporta algún codec HW
+    def isHwCodecAvailable(codec: String): Boolean = {
+      try {
+        val probe = new FFmpegFrameRecorder("/dev/null", 16, 16)
+        probe.setFormat("mp4")
+        probe.setVideoCodecName(codec)
+        probe.start()
+        probe.stop()
+        true
+      } catch {
+        case _: Throwable => false
+      }
+    }
+    val selectedHwCodec = hwCodecs.find(isHwCodecAvailable)
+
     if (grabber.hasVideo) {
-      // Keep the rotation from original video, so all the other data including audio match the orientation
+      // Mantener la rotación del video original
       recorder.setDisplayRotation(grabber.getDisplayRotation)
       recorder.setVideoMetadata(grabber.getVideoMetadata)
       val qualityScale = UNSUPPORTED_VIDEO_CODECS_TO_BITRATE_SCALE.get(grabber.getVideoCodec)
       if (qualityScale.isEmpty) {
         recorder.setVideoCodec(grabber.getVideoCodec)
-      }
-      else {
+      } else {
         recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264)
       }
-      if (recorder.getVideoCodec == avcodec.AV_CODEC_ID_H264) {
-        recorder.setVideoCodecName("libx264")
+
+      // Si hay HW Accel disponible, usar el primer codec soportado
+      selectedHwCodec match {
+        case Some(hwCodec) =>
+          recorder.setVideoCodecName(hwCodec)
+          recorder.setVideoOption("preset", "fast")
+          recorder.setVideoOption("rc", "vbr")
+        case None =>
+          if (recorder.getVideoCodec == avcodec.AV_CODEC_ID_H264) {
+            recorder.setVideoCodecName("libx264")
+          }
       }
+
       recorder.setVideoBitrate((grabber.getVideoBitrate * qualityScale.getOrElse(1.0) * setup.bitrateRatio.getOrElse(10000) / 10000.0).toInt)
       recorder.setVideoOption("tune", "film")
-//      recorder.setVideoOption("threads", "4")
-//      recorder.setVideoOption("frame-threads", "4")
-//      recorder.setVideoOption("threadslice", "4")
-//      recorder.setVideoOption("slicethread", "4")
-//      recorder.setVideoOption("thread_slice", "4")
-//      recorder.setVideoOption("slice_thread", "4")
-//      recorder.setVideoOption("preset", "ultrafast")
     }
     if (grabber.hasAudio) {
       recorder.setAudioChannels(grabber.getAudioChannels)
